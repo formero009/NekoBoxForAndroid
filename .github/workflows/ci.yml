@@ -37,6 +37,9 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ^1.24
+      - name: Setup Android SDK
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: android-actions/setup-android@v3
       - name: Native Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -82,6 +85,8 @@ jobs:
         with:
           path: ~/.gradle
           key: gradle-oss-${{ hashFiles('**/*.gradle.kts') }}-ci
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
       - name: Gradle Build
         env:
           BUILD_PLUGIN: none
