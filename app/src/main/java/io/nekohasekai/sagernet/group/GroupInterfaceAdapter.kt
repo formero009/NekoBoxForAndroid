@@ -8,21 +8,28 @@ import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
 import io.nekohasekai.sagernet.ui.ThemedActivity
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 class GroupInterfaceAdapter(val context: ThemedActivity) : GroupManager.Interface {
 
-    override suspend fun confirm(message: String): Boolean {
-        return suspendCoroutine {
-            runOnMainDispatcher {
-                MaterialAlertDialogBuilder(context).setTitle(R.string.confirm)
-                    .setMessage(message)
-                    .setPositiveButton(R.string.yes) { _, _ -> it.resume(true) }
-                    .setNegativeButton(R.string.no) { _, _ -> it.resume(false) }
-                    .setOnCancelListener { _ -> it.resume(false) }
-                    .show()
+    private fun canShowUi() = !context.isFinishing && !context.isDestroyed
+
+    override suspend fun confirm(message: String): Boolean = onMainDispatcher {
+        if (!canShowUi()) return@onMainDispatcher false
+        suspendCancellableCoroutine { continuation ->
+            val dialog = MaterialAlertDialogBuilder(context).setTitle(R.string.confirm)
+                .setMessage(message)
+                .setPositiveButton(R.string.yes) { _, _ ->
+                    if (continuation.isActive) continuation.resume(true)
+                }
+                .setNegativeButton(R.string.no, null)
+                .show()
+            dialog.setOnDismissListener {
+                if (continuation.isActive) continuation.resume(false)
             }
+            continuation.invokeOnCancellation { runOnMainDispatcher { dialog.dismiss() } }
         }
     }
 
@@ -34,7 +41,8 @@ class GroupInterfaceAdapter(val context: ThemedActivity) : GroupManager.Interfac
         deleted: List<String>,
         duplicate: List<String>,
         byUser: Boolean
-    ) {
+    ) = onMainDispatcher {
+        if (!canShowUi()) return@onMainDispatcher
         if (changed == 0 && duplicate.isEmpty()) {
             if (byUser) context.snackbar(
                     context.getString(
@@ -43,6 +51,7 @@ class GroupInterfaceAdapter(val context: ThemedActivity) : GroupManager.Interfac
             ).show()
         } else {
             context.snackbar(context.getString(R.string.group_updated, group.name, changed)).show()
+            if (!byUser) return@onMainDispatcher
 
             var status = ""
             if (added.isNotEmpty()) {
@@ -67,9 +76,8 @@ class GroupInterfaceAdapter(val context: ThemedActivity) : GroupManager.Interfac
                 )
             }
 
-            onMainDispatcher {
-                delay(1000L)
-
+            delay(1000L)
+            if (canShowUi()) {
                 MaterialAlertDialogBuilder(context).setTitle(
                         context.getString(
                                 R.string.group_diff, group.displayName()
@@ -83,7 +91,7 @@ class GroupInterfaceAdapter(val context: ThemedActivity) : GroupManager.Interfac
 
     override suspend fun onUpdateFailure(group: ProxyGroup, message: String) {
         onMainDispatcher {
-            context.snackbar(message).show()
+            if (canShowUi()) context.snackbar(message).show()
         }
     }
 

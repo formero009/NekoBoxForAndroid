@@ -15,6 +15,8 @@ import io.nekohasekai.sagernet.fmt.v2ray.StandardV2RayBean
 import io.nekohasekai.sagernet.fmt.v2ray.isTLS
 import io.nekohasekai.sagernet.ktx.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.util.*
@@ -123,6 +125,7 @@ abstract class GroupUpdater {
 
         val updating = Collections.synchronizedSet<Long>(mutableSetOf())
         val progress = Collections.synchronizedMap<Long, Progress>(mutableMapOf())
+        private val updateLock = Mutex()
 
         fun startUpdate(proxyGroup: ProxyGroup, byUser: Boolean) {
             runOnDefaultDispatcher {
@@ -130,32 +133,42 @@ abstract class GroupUpdater {
             }
         }
 
-        suspend fun executeUpdate(proxyGroup: ProxyGroup, byUser: Boolean): Boolean {
-            return coroutineScope {
-                if (!updating.add(proxyGroup.id)) cancel()
-                GroupManager.postReload(proxyGroup.id)
+        fun startUpdates(proxyGroups: List<ProxyGroup>) {
+            runOnDefaultDispatcher {
+                for (group in proxyGroups) {
+                    executeUpdate(group, byUser = true, showDetails = false)
+                }
+            }
+        }
 
-                val subscription = proxyGroup.subscription!!
+        suspend fun executeUpdate(
+            proxyGroup: ProxyGroup,
+            byUser: Boolean,
+            showDetails: Boolean = byUser
+        ): Boolean {
+            if (!updating.add(proxyGroup.id)) return false
+            val userInterface = GroupManager.userInterface
+            return try {
+                GroupManager.postReload(proxyGroup.id)
+                val subscription = proxyGroup.subscription ?: return false
                 val connected = DataStore.serviceState.connected
-                val userInterface = GroupManager.userInterface
 
                 if (byUser && (subscription.link?.startsWith("http://") == true || subscription.updateWhenConnectedOnly) && !connected) {
-                    if (userInterface == null || !userInterface.confirm(app.getString(R.string.update_subscription_warning))) {
-                        finishUpdate(proxyGroup)
-                        cancel()
-                        return@coroutineScope true
-                    }
+                    if (userInterface?.confirm(app.getString(R.string.update_subscription_warning)) != true) return false
                 }
 
-                try {
-                    RawUpdater.doUpdate(proxyGroup, subscription, userInterface, byUser)
-                    true
-                } catch (e: Throwable) {
-                    Logs.w(e)
-                    userInterface?.onUpdateFailure(proxyGroup, e.readableMessage)
-                    finishUpdate(proxyGroup)
-                    false
+                updateLock.withLock {
+                    RawUpdater.doUpdate(proxyGroup, subscription, userInterface, byUser && showDetails)
                 }
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logs.w(e)
+                userInterface?.onUpdateFailure(proxyGroup, e.readableMessage)
+                false
+            } finally {
+                withContext(NonCancellable) { finishUpdate(proxyGroup) }
             }
         }
 
