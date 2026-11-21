@@ -150,6 +150,7 @@ fun Project.setupApp() {
             versionCode = verCode
             versionName = verName
             buildConfigField("String", "PRE_VERSION_NAME", "\"\"")
+            resValue("string", "shortcut_target_package", pkgName)
         }
     }
     setupAppCommon()
@@ -158,6 +159,9 @@ fun Project.setupApp() {
         this as AbstractAppExtension
 
         buildTypes {
+            getByName("debug") {
+                resValue("string", "shortcut_target_package", pkgName + applicationIdSuffix.orEmpty())
+            }
             getByName("release") {
                 proguardFiles(
                     getDefaultProguardFile("proguard-android-optimize.txt"),
