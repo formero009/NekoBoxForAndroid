@@ -33,33 +33,40 @@ abstract class GroupUpdater {
     )
 
     data class Progress(
-        var max: Int
+        val max: Int
     ) {
-        var progress by AtomicInteger()
+        private val completed = AtomicInteger()
+        val progress get() = completed.get()
+        fun increment() = completed.incrementAndGet()
     }
 
     protected suspend fun forceResolve(
         profiles: List<AbstractBean>, groupId: Long?
-    ) {
+    ) = coroutineScope {
         val ipv6Mode = DataStore.ipv6Mode
-        val lookupPool = newFixedThreadPoolContext(5, "DNS Lookup")
-        val lookupJobs = mutableListOf<Job>()
+        val lookupPool = Dispatchers.IO.limitedParallelism(5)
         val progress = Progress(profiles.size)
+        val progressInterval = maxOf(1, profiles.size / 25)
         if (groupId != null) {
             GroupUpdater.progress[groupId] = progress
-            GroupManager.postReload(groupId)
+            GroupManager.postProgress(groupId)
         }
         val ipv6First = ipv6Mode >= IPv6Mode.PREFER
 
+        suspend fun reportProgress() {
+            val completed = progress.increment()
+            if (groupId != null && (completed % progressInterval == 0 || completed == progress.max)) {
+                GroupManager.postProgress(groupId)
+            }
+        }
+
         for (profile in profiles) {
-            when (profile) {
-                // SNI rewrite unsupported
-                is NaiveBean -> continue
+            if (profile is NaiveBean || profile.serverAddress.isIpAddress()) {
+                reportProgress()
+                continue
             }
 
-            if (profile.serverAddress.isIpAddress()) continue
-
-            lookupJobs.add(GlobalScope.launch(lookupPool) {
+            launch(lookupPool) {
                 try {
                     val results = if (
                         SagerNet.underlyingNetwork != null &&
@@ -80,15 +87,9 @@ abstract class GroupUpdater {
                 } catch (e: Exception) {
                     Logs.d("Lookup ${profile.serverAddress} failed: ${e.readableMessage}", e)
                 }
-                if (groupId != null) {
-                    progress.progress++
-                    GroupManager.postReload(groupId)
-                }
-            })
+                reportProgress()
+            }
         }
-
-        lookupJobs.joinAll()
-        lookupPool.close()
     }
 
     protected fun rewriteAddress(

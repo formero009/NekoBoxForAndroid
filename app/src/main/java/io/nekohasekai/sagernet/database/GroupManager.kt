@@ -12,6 +12,7 @@ object GroupManager {
 
         suspend fun groupRemoved(groupId: Long)
         suspend fun groupUpdated(groupId: Long)
+        suspend fun groupProgressUpdated(groupId: Long) = Unit
     }
 
     interface Interface {
@@ -77,6 +78,10 @@ object GroupManager {
 
     suspend fun postReload(groupId: Long) {
         iterator { groupUpdated(groupId) }
+    }
+
+    suspend fun postProgress(groupId: Long) {
+        iterator { groupProgressUpdated(groupId) }
     }
 
     suspend fun createGroup(group: ProxyGroup): ProxyGroup {

@@ -26,7 +26,6 @@ import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.widget.ListListener
 import io.nekohasekai.sagernet.widget.QRCodeDialog
 import io.nekohasekai.sagernet.widget.UndoSnackbarManager
-import kotlinx.coroutines.delay
 import moe.matsuri.nb4a.utils.Util
 import moe.matsuri.nb4a.utils.toBytesString
 import java.lang.NumberFormatException
@@ -163,11 +162,18 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
         val groupList = ArrayList<ProxyGroup>()
 
         suspend fun reload() {
-            val groups = SagerDatabase.groupDao.allGroups().toMutableList()
-            if (groups.size > 1 && SagerDatabase.proxyDao.countByGroup(groups.find { it.ungrouped }!!.id) == 0L) groups.removeAll { it.ungrouped }
-            groupList.clear()
-            groupList.addAll(groups)
-            groupListView.post {
+            val groups = onDefaultDispatcher {
+                SagerDatabase.groupDao.allGroups().toMutableList().apply {
+                    val ungrouped = find { it.ungrouped }
+                    if (size > 1 && ungrouped != null && SagerDatabase.proxyDao.countByGroup(ungrouped.id) == 0L) {
+                        remove(ungrouped)
+                    }
+                }
+            }
+            onMainDispatcher {
+                if (viewLifecycleOwnerLiveData.value == null || groupListView.adapter !== this@GroupAdapter) return@onMainDispatcher
+                groupList.clear()
+                groupList.addAll(groups)
                 notifyDataSetChanged()
             }
         }
@@ -243,59 +249,55 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
             }
         }
 
-        override suspend fun groupAdd(group: ProxyGroup) {
+        override suspend fun groupAdd(group: ProxyGroup) = onMainDispatcher {
+            if (viewLifecycleOwnerLiveData.value == null) return@onMainDispatcher
+            undoManager.flush()
             groupList.add(group)
-            delay(300L)
-
-            onMainDispatcher {
-                undoManager.flush()
-                notifyItemInserted(groupList.size - 1)
-
-                if (group.type == GroupType.SUBSCRIPTION) {
-                    GroupUpdater.startUpdate(group, true)
-                }
+            notifyItemInserted(groupList.lastIndex)
+            if (group.type == GroupType.SUBSCRIPTION) {
+                GroupUpdater.startUpdate(group, true)
             }
         }
 
-        override suspend fun groupRemoved(groupId: Long) {
+        override suspend fun groupRemoved(groupId: Long) = onMainDispatcher {
+            if (viewLifecycleOwnerLiveData.value == null) return@onMainDispatcher
             val index = groupList.indexOfFirst { it.id == groupId }
-            if (index == -1) return
-            onMainDispatcher {
-                undoManager.flush()
-                if (SagerDatabase.groupDao.allGroups().size <= 2) {
-                    runOnDefaultDispatcher {
-                        reload()
-                    }
-                } else {
-                    groupList.removeAt(index)
-                    notifyItemRemoved(index)
-                }
+            if (index == -1) return@onMainDispatcher
+            undoManager.flush()
+            if (SagerDatabase.groupDao.allGroups().size <= 2) {
+                reload()
+            } else {
+                groupList.removeAt(index)
+                notifyItemRemoved(index)
             }
         }
 
-        override suspend fun groupUpdated(group: ProxyGroup) {
+        override suspend fun groupUpdated(group: ProxyGroup) = onMainDispatcher {
+            if (viewLifecycleOwnerLiveData.value == null) return@onMainDispatcher
             val index = groupList.indexOfFirst { it.id == group.id }
             if (index == -1) {
                 reload()
-                return
+                return@onMainDispatcher
             }
             groupList[index] = group
-            onMainDispatcher {
-                undoManager.flush()
-
-                notifyItemChanged(index)
-            }
+            undoManager.flush()
+            notifyItemChanged(index)
         }
 
-        override suspend fun groupUpdated(groupId: Long) {
+        override suspend fun groupUpdated(groupId: Long) = onMainDispatcher {
+            if (viewLifecycleOwnerLiveData.value == null) return@onMainDispatcher
             val index = groupList.indexOfFirst { it.id == groupId }
             if (index == -1) {
                 reload()
-                return
+                return@onMainDispatcher
             }
-            onMainDispatcher {
-                notifyItemChanged(index)
-            }
+            notifyItemChanged(index)
+        }
+
+        override suspend fun groupProgressUpdated(groupId: Long) = onMainDispatcher {
+            if (viewLifecycleOwnerLiveData.value == null) return@onMainDispatcher
+            val index = groupList.indexOfFirst { it.id == groupId }
+            if (index >= 0) notifyItemChanged(index)
         }
 
     }
